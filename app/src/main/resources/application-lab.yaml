@@ -1,0 +1,13 @@
+# Profile for the Docker Compose lab: fault injection control plane, synthetic seed data and JSON logs.
+spring:
+  flyway:
+    locations: classpath:db/migration, classpath:db/seed
+
+sentinel:
+  lab:
+    enabled: true
+
+logging:
+  structured:
+    format:
+      console: ecs

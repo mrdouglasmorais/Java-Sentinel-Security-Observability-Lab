@@ -1,0 +1,137 @@
+spring:
+  application:
+    name: sentinel-api
+  threads:
+    virtual:
+      enabled: true
+  mvc:
+    problemdetails:
+      enabled: true
+  datasource:
+    url: ${SENTINEL_DB_URL:jdbc:postgresql://localhost:5432/sentinel}
+    username: ${SENTINEL_DB_USER:sentinel}
+    password: ${SENTINEL_DB_PASSWORD:}
+    hikari:
+      pool-name: sentinel-db
+      # Small on purpose: makes pool saturation observable in the slow-database scenario.
+      maximum-pool-size: 10
+      # Fail fast instead of queueing requests behind an exhausted pool (milliseconds).
+      connection-timeout: 2000
+      data-source-properties:
+        # Bounds the other two ways a request can wait on the database: row locks on a hot account and runaway
+        # statements. Both surface as transient errors and are answered with 503 + Retry-After.
+        options: "-c lock_timeout=2s -c statement_timeout=5s"
+  flyway:
+    locations: classpath:db/migration
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Tokens carry the issuer seen by clients; keys are fetched over the internal network.
+          issuer-uri: ${SENTINEL_JWT_ISSUER_URI:http://localhost:8180/realms/sentinel}
+          jwk-set-uri: ${SENTINEL_JWT_JWK_SET_URI:http://localhost:8180/realms/sentinel/protocol/openid-connect/certs}
+          audiences: sentinel-api
+
+server:
+  port: ${PORT:8080}
+  error:
+    include-stacktrace: never
+    include-message: never
+
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  info:
+    java:
+      enabled: true
+    os:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      # Bounding the histogram range keeps the bucket (series) count low without losing the 5ms-10s range.
+      minimum-expected-value:
+        http.server.requests: 5ms
+        sentinel.risk.assessment: 5ms
+        sentinel.risk.engine.calls: 5ms
+      maximum-expected-value:
+        http.server.requests: 10s
+        sentinel.risk.assessment: 10s
+        sentinel.risk.engine.calls: 10s
+
+resilience4j:
+  timelimiter:
+    instances:
+      riskEngine:
+        timeout-duration: 800ms
+        cancel-running-future: true
+  bulkhead:
+    instances:
+      riskEngine:
+        max-concurrent-calls: 25
+        max-wait-duration: 0ms
+  circuitbreaker:
+    instances:
+      riskEngine:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        slow-call-duration-threshold: 600ms
+        slow-call-rate-threshold: 80
+        wait-duration-in-open-state: 15s
+        permitted-number-of-calls-in-half-open-state: 5
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - java.util.concurrent.TimeoutException
+          - dev.sentinel.payments.risk.RiskEngineClient$RiskEngineException
+        ignore-exceptions:
+          - io.github.resilience4j.bulkhead.BulkheadFullException
+  retry:
+    instances:
+      riskEngine:
+        # 1 call + 2 retries. Every retry multiplies load on a struggling dependency; keep the budget small.
+        max-attempts: 3
+        wait-duration: 100ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        enable-randomized-wait: true
+        randomized-wait-factor: 0.5
+        retry-exceptions:
+          - java.util.concurrent.TimeoutException
+          - dev.sentinel.payments.risk.RiskEngineClient$RiskEngineException
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+          - io.github.resilience4j.bulkhead.BulkheadFullException
+
+sentinel:
+  lab:
+    enabled: false
+  payments:
+    risk:
+      approval-threshold: 80
+      fallback-approval-limit: 100.00
+  security:
+    rate-limit:
+      enabled: true
+      max-tracked-clients: 10000
+      api:
+        capacity: 200
+        refill-tokens: 100
+        refill-period: 1s
+      transfers:
+        capacity: 40
+        refill-tokens: 20
+        refill-period: 1s
