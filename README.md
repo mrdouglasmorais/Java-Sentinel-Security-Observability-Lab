@@ -1,5 +1,7 @@
 # Java Sentinel — Security & Observability Lab
 
+![Java Sentinel: security, observability and resilience beyond the code](docs/assets/cover.png)
+
 An open source engineering lab where you **break a payments API on purpose, find the cause with telemetry and watch
 the protections kick in**. Not another CRUD with dashboards: every component exists to make a production problem
 reproducible and investigable.
@@ -51,6 +53,11 @@ flowchart LR
     tempo -->|span metrics,<br/>service graph| prom
     graf[Grafana] --> prom & tempo & loki
 ```
+
+The dashboard **Sentinel — APM & Security** with lab faults active (the *Lab faults* switch is on, and the ground-truth
+panel shows the injected faults against the circuit breaker's reaction):
+
+![Grafana dashboard Sentinel — APM & Security with lab faults active](docs/assets/screem.png)
 
 Signals and how they connect:
 
@@ -192,3 +199,12 @@ either way.
 ## License
 
 [Apache License 2.0](LICENSE)
+
+## Author
+
+**Douglas Morais**
+
+- GitHub: [github.com/mrdouglasmorais](https://github.com/mrdouglasmorais)
+- Portfolio: [douglasmorais-arq.vercel.app](https://douglasmorais-arq.vercel.app)
+- Credly: [credly.com/users/douglas-morais](https://www.credly.com/users/douglas-morais)
+- Medium: [medium.com/@mr.douglasmorais23](https://medium.com/@mr.douglasmorais23)

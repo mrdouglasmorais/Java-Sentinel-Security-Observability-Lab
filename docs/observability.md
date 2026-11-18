@@ -1,5 +1,7 @@
 # Observability guide
 
+![Sentinel — APM & Security dashboard with lab faults active](assets/screem.png)
+
 ## The investigation loop
 
 ```mermaid
