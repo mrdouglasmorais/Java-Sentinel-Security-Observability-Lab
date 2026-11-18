@@ -11,6 +11,7 @@ import java.util.UUID;
 import dev.sentinel.payments.domain.Account;
 import dev.sentinel.payments.domain.AccountRepository;
 import dev.sentinel.payments.domain.LedgerEntry;
+import dev.sentinel.payments.domain.PaymentException;
 import dev.sentinel.simulation.FaultInjector;
 import dev.sentinel.simulation.FaultTarget;
 
@@ -60,10 +61,13 @@ class JdbcAccountRepository implements AccountRepository {
 
     @Override
     public void updateBalance(UUID accountId, BigDecimal newBalance) {
-        jdbc.sql("UPDATE account SET balance = :balance, version = version + 1 WHERE id = :id")
+        int updated = jdbc.sql("UPDATE account SET balance = :balance, version = version + 1 WHERE id = :id")
                 .param("balance", newBalance)
                 .param("id", accountId)
                 .update();
+        if (updated != 1) {
+            throw new PaymentException.AccountNotFound(accountId);
+        }
     }
 
     @Override
