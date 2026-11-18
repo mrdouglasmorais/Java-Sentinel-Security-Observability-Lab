@@ -1,7 +1,6 @@
 package dev.sentinel.payments.application;
 
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import dev.sentinel.identity.CurrentUser;
@@ -9,8 +8,6 @@ import dev.sentinel.payments.domain.Account;
 import dev.sentinel.payments.domain.AccountRepository;
 import dev.sentinel.payments.domain.LedgerEntry;
 import dev.sentinel.payments.domain.PaymentException;
-import dev.sentinel.security.SecurityAuditLog;
-import dev.sentinel.security.SecurityEventType;
 
 import org.springframework.stereotype.Service;
 
@@ -18,11 +15,11 @@ import org.springframework.stereotype.Service;
 public class AccountService {
 
     private final AccountRepository accounts;
-    private final SecurityAuditLog auditLog;
+    private final ResourceGuard guard;
 
-    public AccountService(AccountRepository accounts, SecurityAuditLog auditLog) {
+    public AccountService(AccountRepository accounts, ResourceGuard guard) {
         this.accounts = accounts;
-        this.auditLog = auditLog;
+        this.guard = guard;
     }
 
     public List<Account> myAccounts(CurrentUser user) {
@@ -31,12 +28,8 @@ public class AccountService {
 
     public Account visibleAccount(CurrentUser user, UUID accountId) {
         Account account = accounts.findById(accountId).orElseThrow(() -> new PaymentException.AccountNotFound(accountId));
-        if (!account.isVisibleTo(user)) {
-            auditLog.recordForCurrentRequest(SecurityEventType.OWNERSHIP_VIOLATION, user.username(),
-                    Map.of("resource.type", "account", "resource.id", accountId.toString()));
-            throw new PaymentException.AccountNotFound(accountId);
-        }
-        return account;
+        return guard.require(user, account, account.isVisibleTo(user), "account", accountId.toString(),
+                () -> new PaymentException.AccountNotFound(accountId));
     }
 
     public List<LedgerEntry> ledger(CurrentUser user, UUID accountId, int limit) {

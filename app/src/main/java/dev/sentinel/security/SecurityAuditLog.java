@@ -1,6 +1,9 @@
 package dev.sentinel.security;
 
+import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -29,14 +32,20 @@ public class SecurityAuditLog {
     private static final Logger AUDIT = LoggerFactory.getLogger("sentinel.audit");
 
     private final MeterRegistry registry;
+    private final ConcurrentMap<String, Counter> counters = new ConcurrentHashMap<>();
 
     public SecurityAuditLog(MeterRegistry registry) {
         this.registry = registry;
     }
 
-    /**
-     * Records an event raised from application code, taking client address and path from the current HTTP request.
-     */
+    public void ownershipViolation(String principal, String resourceType, String resourceId, Map<String, String> extra) {
+        Map<String, String> details = new HashMap<>(extra.size() + 2);
+        details.put("resource.type", resourceType);
+        details.put("resource.id", resourceId);
+        details.putAll(extra);
+        recordForCurrentRequest(SecurityEventType.OWNERSHIP_VIOLATION, principal, details);
+    }
+
     public void recordForCurrentRequest(SecurityEventType type, String principal, Map<String, String> details) {
         if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
             HttpServletRequest request = attributes.getRequest();
@@ -47,11 +56,12 @@ public class SecurityAuditLog {
     }
 
     public void record(SecurityEventType type, String principal, String clientAddress, String path, Map<String, String> details) {
-        Counter.builder("sentinel.security.events")
+        String group = EndpointGroup.of(path);
+        counters.computeIfAbsent(type.tagValue() + '\u0000' + group, key -> Counter.builder("sentinel.security.events")
                 .description("Security-relevant events (authentication failures, denials, rate limiting, lab changes)")
                 .tag("type", type.tagValue())
-                .tag("endpoint_group", EndpointGroup.of(path))
-                .register(registry)
+                .tag("endpoint_group", group)
+                .register(registry))
                 .increment();
 
         LoggingEventBuilder event = AUDIT.atWarn()

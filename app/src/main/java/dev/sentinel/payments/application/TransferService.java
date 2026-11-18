@@ -18,8 +18,6 @@ import dev.sentinel.payments.risk.RiskAssessment;
 import dev.sentinel.payments.risk.RiskAssessmentPort;
 import dev.sentinel.payments.risk.RiskPolicy;
 import dev.sentinel.payments.risk.RiskRequest;
-import dev.sentinel.security.SecurityAuditLog;
-import dev.sentinel.security.SecurityEventType;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.instrumentation.annotations.WithSpan;
 
@@ -41,17 +39,17 @@ public class TransferService {
     private final RiskPolicy riskPolicy;
     private final TransactionTemplate transaction;
     private final PaymentsMetrics metrics;
-    private final SecurityAuditLog auditLog;
+    private final ResourceGuard guard;
 
     public TransferService(AccountRepository accounts, TransferRepository transfers, RiskAssessmentPort riskAssessment,
-            PaymentsProperties properties, TransactionTemplate transaction, PaymentsMetrics metrics, SecurityAuditLog auditLog) {
+            PaymentsProperties properties, TransactionTemplate transaction, PaymentsMetrics metrics, ResourceGuard guard) {
         this.accounts = accounts;
         this.transfers = transfers;
         this.riskAssessment = riskAssessment;
         this.riskPolicy = properties.riskPolicy();
         this.transaction = transaction;
         this.metrics = metrics;
-        this.auditLog = auditLog;
+        this.guard = guard;
     }
 
     @WithSpan("transfer execute")
@@ -96,22 +94,14 @@ public class TransferService {
 
     public Transfer visibleTransfer(CurrentUser user, UUID transferId) {
         Transfer transfer = transfers.findById(transferId).orElseThrow(() -> new PaymentException.TransferNotFound(transferId));
-        if (!transfer.isVisibleTo(user)) {
-            auditLog.recordForCurrentRequest(SecurityEventType.OWNERSHIP_VIOLATION, user.username(),
-                    Map.of("resource.type", "transfer", "resource.id", transferId.toString()));
-            throw new PaymentException.TransferNotFound(transferId);
-        }
-        return transfer;
+        return guard.require(user, transfer, transfer.isVisibleTo(user), "transfer", transferId.toString(),
+                () -> new PaymentException.TransferNotFound(transferId));
     }
 
     private Account ownedAccount(CurrentUser user, UUID accountId) {
         Account account = accounts.findById(accountId).orElseThrow(() -> new PaymentException.AccountNotFound(accountId));
-        if (!account.isOwnedBy(user)) {
-            auditLog.recordForCurrentRequest(SecurityEventType.OWNERSHIP_VIOLATION, user.username(),
-                    Map.of("resource.type", "account", "resource.id", accountId.toString(), "operation", "transfer"));
-            throw new PaymentException.AccountNotFound(accountId);
-        }
-        return account;
+        return guard.require(user, account, account.isOwnedBy(user), "account", accountId.toString(),
+                Map.of("operation", "transfer"), () -> new PaymentException.AccountNotFound(accountId));
     }
 
     /**
@@ -131,6 +121,12 @@ public class TransferService {
                 .collect(Collectors.toMap(Account::id, Function.identity()));
         Account source = locked.get(command.sourceAccountId());
         Account target = locked.get(command.targetAccountId());
+        if (source == null) {
+            throw new PaymentException.AccountNotFound(command.sourceAccountId());
+        }
+        if (target == null) {
+            throw new PaymentException.AccountNotFound(command.targetAccountId());
+        }
 
         // Re-checked under lock: the early check above is only an optimisation.
         BigDecimal sourceBalance = source.balance().subtract(command.amount());
