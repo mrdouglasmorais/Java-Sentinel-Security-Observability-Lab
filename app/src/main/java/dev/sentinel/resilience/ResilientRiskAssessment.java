@@ -1,6 +1,8 @@
 package dev.sentinel.resilience;
 
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeoutException;
@@ -24,6 +26,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
@@ -63,12 +66,13 @@ public class ResilientRiskAssessment implements RiskAssessmentPort {
     private final TimeLimiter timeLimiter;
     private final Tracer tracer;
     private final MeterRegistry registry;
+    private final Counter attemptsCounter;
+    private final ConcurrentMap<String, Timer> assessmentTimers = new ConcurrentHashMap<>();
 
     public ResilientRiskAssessment(RiskEngineClient client, RetryRegistry retries, CircuitBreakerRegistry circuitBreakers,
             BulkheadRegistry bulkheads, TimeLimiterRegistry timeLimiters, Tracer tracer, MeterRegistry registry) {
         this.client = client;
-        // Virtual threads make a blocked call cheap; the bulkhead, not a thread pool, bounds concurrency.
-        // Task wrapping carries the caller's trace context onto the new thread.
+        // The attempt runs on a virtual thread; this keeps the caller's trace context on that thread.
         this.executor = Context.taskWrapping(Executors.newVirtualThreadPerTaskExecutor());
         this.retry = retries.retry(INSTANCE);
         this.circuitBreaker = circuitBreakers.circuitBreaker(INSTANCE);
@@ -76,6 +80,9 @@ public class ResilientRiskAssessment implements RiskAssessmentPort {
         this.timeLimiter = timeLimiters.timeLimiter(INSTANCE);
         this.tracer = tracer;
         this.registry = registry;
+        this.attemptsCounter = Counter.builder("sentinel.risk.attempts")
+                .description("Attempts made against the risk engine; compare with assessments to see retry amplification")
+                .register(registry);
     }
 
     @Override
@@ -94,9 +101,13 @@ public class ResilientRiskAssessment implements RiskAssessmentPort {
                             Bulkhead.decorateCallable(bulkhead, attempt)));
             result = new RiskAssessment.Scored(guarded.call());
         } catch (Exception failure) {
-            result = new RiskAssessment.Unavailable(causeOf(failure));
+            if (interrupted(failure)) {
+                Thread.currentThread().interrupt();
+            }
+            String cause = causeOf(failure);
+            result = new RiskAssessment.Unavailable(cause);
             log.atWarn()
-                    .addKeyValue("risk.unavailable_cause", causeOf(failure))
+                    .addKeyValue("risk.unavailable_cause", cause)
                     .addKeyValue("risk.attempts", attempts.get())
                     .addKeyValue("circuit_breaker.state", circuitBreaker.getState().name())
                     .log("risk engine unavailable, applying degradation policy");
@@ -106,20 +117,20 @@ public class ResilientRiskAssessment implements RiskAssessmentPort {
             case RiskAssessment.Scored _ -> "scored";
             case RiskAssessment.Unavailable(String cause) -> cause;
         };
+        if (result instanceof RiskAssessment.Unavailable) {
+            span.setStatus(StatusCode.ERROR, outcome);
+        }
         span.setAttribute("sentinel.risk.outcome", outcome);
         span.setAttribute("sentinel.risk.attempts", attempts.get());
         span.setAttribute("sentinel.circuit_breaker.state", circuitBreaker.getState().name());
         span.end();
 
-        sample.stop(Timer.builder("sentinel.risk.assessment")
+        sample.stop(assessmentTimers.computeIfAbsent(outcome, key -> Timer.builder("sentinel.risk.assessment")
                 .description("End-to-end risk assessment including retries, as perceived by the transfer")
-                .tag("outcome", outcome)
+                .tag("outcome", key)
                 .publishPercentileHistogram()
-                .register(registry));
-        Counter.builder("sentinel.risk.attempts")
-                .description("Attempts made against the risk engine; compare with assessments to see retry amplification")
-                .register(registry)
-                .increment(attempts.get());
+                .register(registry)));
+        attemptsCounter.increment(attempts.get());
         return result;
     }
 
@@ -128,12 +139,27 @@ public class ResilientRiskAssessment implements RiskAssessmentPort {
         executor.close();
     }
 
-    private static String causeOf(Exception failure) {
-        return switch (failure) {
-            case TimeoutException _ -> "timeout";
-            case CallNotPermittedException _ -> "circuit_open";
-            case BulkheadFullException _ -> "bulkhead_full";
-            default -> "error";
-        };
+    private static String causeOf(Throwable failure) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof TimeoutException) {
+                return "timeout";
+            }
+            if (current instanceof CallNotPermittedException) {
+                return "circuit_open";
+            }
+            if (current instanceof BulkheadFullException) {
+                return "bulkhead_full";
+            }
+        }
+        return "error";
+    }
+
+    private static boolean interrupted(Throwable failure) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof InterruptedException) {
+                return true;
+            }
+        }
+        return false;
     }
 }
