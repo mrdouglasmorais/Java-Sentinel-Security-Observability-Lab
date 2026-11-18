@@ -1,0 +1,257 @@
+{
+  "uid": "sentinel-apm",
+  "title": "Sentinel — APM & Security",
+  "description": "RED signals, dependency resilience, security events and saturation for the Java Sentinel lab. Red regions mark injected lab faults (ground truth).",
+  "tags": ["sentinel", "apm", "security", "java"],
+  "timezone": "browser",
+  "editable": false,
+  "graphTooltip": 1,
+  "refresh": "5s",
+  "schemaVersion": 41,
+  "time": { "from": "now-15m", "to": "now" },
+  "annotations": {
+    "list": [
+      {
+        "name": "Lab faults",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "enable": true,
+        "iconColor": "rgba(242, 73, 92, 0.25)",
+        "expr": "sentinel_lab_fault_active == 1",
+        "step": "5s",
+        "titleFormat": "Lab fault injected",
+        "textFormat": "target: {{target}}",
+        "tagKeys": "target"
+      }
+    ]
+  },
+  "panels": [
+    { "type": "row", "title": "Golden signals (RED)", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
+    {
+      "type": "stat", "title": "Throughput", "description": "API requests per second (actuator excluded).",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "decimals": 1, "color": { "mode": "fixed", "fixedColor": "blue" } } },
+      "options": { "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "expr": "sum(rate(http_server_requests_seconds_count{application=\"sentinel-api\", uri=~\"/api/.*\"}[$__rate_interval]))" } ]
+    },
+    {
+      "type": "stat", "title": "Transfer P95", "description": "95th percentile latency of POST /api/transfers.",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 3,
+        "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 0.3 }, { "color": "red", "value": 0.8 } ] } } },
+      "options": { "graphMode": "area", "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/api/transfers\", method=\"POST\"}[$__rate_interval])))" } ]
+    },
+    {
+      "type": "stat", "title": "Transfer P99", "description": "99th percentile latency of POST /api/transfers. The mean hides what this shows.",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 3,
+        "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 0.5 }, { "color": "red", "value": 1 } ] } } },
+      "options": { "graphMode": "area", "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/api/transfers\", method=\"POST\"}[$__rate_interval])))" } ]
+    },
+    {
+      "type": "stat", "title": "Error rate (5xx)", "description": "Server errors over all API requests. 4xx are client or business outcomes and are excluded.",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 2, "noValue": "0",
+        "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 0.005 }, { "color": "red", "value": 0.02 } ] } } },
+      "options": { "graphMode": "area", "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "expr": "(sum(rate(http_server_requests_seconds_count{uri=~\"/api/.*\", status=~\"5..\"}[$__rate_interval])) or vector(0)) / sum(rate(http_server_requests_seconds_count{uri=~\"/api/.*\"}[$__rate_interval]))" } ]
+    },
+    {
+      "type": "stat", "title": "Blocked requests (5m)", "description": "401 + 403 + 429 + ownership probes recorded as security events.",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "noValue": "0",
+        "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 10 }, { "color": "red", "value": 100 } ] } } },
+      "options": { "graphMode": "area", "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "expr": "sum(increase(sentinel_security_events_total{type=~\"authentication_failed|access_denied|rate_limited|ownership_violation\"}[5m]))" } ]
+    },
+    {
+      "type": "stat", "title": "Risk engine circuit", "description": "Resilience4j circuit breaker protecting the risk engine dependency.",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": {
+        "mappings": [ { "type": "value", "options": {
+          "0": { "text": "CLOSED", "color": "green" },
+          "1": { "text": "HALF-OPEN", "color": "orange" },
+          "2": { "text": "OPEN", "color": "red" } } } ] } },
+      "options": { "graphMode": "none", "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [ { "refId": "A", "expr": "max(resilience4j_circuitbreaker_state{name=\"riskEngine\", state=~\"open|forced_open\"}) * 2 + max(resilience4j_circuitbreaker_state{name=\"riskEngine\", state=\"half_open\"})" } ]
+    },
+    {
+      "type": "timeseries", "title": "POST /api/transfers latency (with exemplars)",
+      "description": "Each diamond is an exemplar: a real request whose trace_id links straight to Tempo.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 5, "showPoints": "never" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "p99" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+          { "matcher": { "id": "byName", "options": "p95" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] },
+          { "matcher": { "id": "byName", "options": "p50" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] },
+          { "matcher": { "id": "byName", "options": "mean" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "text" } }, { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [6, 6] } } ] }
+        ] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "legendFormat": "p50", "expr": "histogram_quantile(0.50, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/api/transfers\", method=\"POST\"}[$__rate_interval])))" },
+        { "refId": "B", "legendFormat": "p95", "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/api/transfers\", method=\"POST\"}[$__rate_interval])))" },
+        { "refId": "C", "legendFormat": "p99", "exemplar": true, "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/api/transfers\", method=\"POST\"}[$__rate_interval])))" },
+        { "refId": "D", "legendFormat": "mean", "expr": "sum(rate(http_server_requests_seconds_sum{uri=\"/api/transfers\", method=\"POST\"}[$__rate_interval])) / sum(rate(http_server_requests_seconds_count{uri=\"/api/transfers\", method=\"POST\"}[$__rate_interval]))" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "Requests by status",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" }, "fillOpacity": 70, "lineWidth": 0 } },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": "5.." }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+          { "matcher": { "id": "byRegexp", "options": "429|401|403" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "purple" } } ] },
+          { "matcher": { "id": "byRegexp", "options": "202|422" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } } ] }
+        ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [ { "refId": "A", "legendFormat": "{{status}}", "expr": "sum by (status) (rate(http_server_requests_seconds_count{uri=~\"/api/.*|UNKNOWN\"}[$__rate_interval]))" } ]
+    },
+
+    { "type": "row", "title": "Dependency & resilience — risk engine", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 } },
+    {
+      "type": "timeseries", "title": "Risk engine latency: per attempt vs. as perceived",
+      "description": "Per attempt = one call to the dependency. As perceived = what the transfer waits for, including timeouts, retries and backoff.",
+      "gridPos": { "h": 8, "w": 9, "x": 0, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 0 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "refId": "A", "legendFormat": "attempt p50", "expr": "histogram_quantile(0.50, sum by (le) (rate(sentinel_risk_engine_calls_seconds_bucket[$__rate_interval])))" },
+        { "refId": "B", "legendFormat": "attempt p99", "expr": "histogram_quantile(0.99, sum by (le) (rate(sentinel_risk_engine_calls_seconds_bucket[$__rate_interval])))" },
+        { "refId": "C", "legendFormat": "perceived p99", "exemplar": true, "expr": "histogram_quantile(0.99, sum by (le) (rate(sentinel_risk_assessment_seconds_bucket[$__rate_interval])))" }
+      ]
+    },
+    {
+      "type": "state-timeline", "title": "Ground truth vs. reaction",
+      "description": "Top: faults injected by the lab. Bottom: how the circuit breaker reacted.",
+      "gridPos": { "h": 8, "w": 7, "x": 9, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": {
+        "mappings": [ { "type": "value", "options": {
+          "0": { "text": "ok", "color": "green" },
+          "1": { "text": "degraded", "color": "orange" },
+          "2": { "text": "OPEN", "color": "red" } } } ] } },
+      "options": { "showValue": "never", "rowHeight": 0.8, "mergeValues": true },
+      "targets": [
+        { "refId": "A", "legendFormat": "fault: {{target}}", "expr": "max by (target) (sentinel_lab_fault_active)" },
+        { "refId": "B", "legendFormat": "circuit breaker", "expr": "max(resilience4j_circuitbreaker_state{name=\"riskEngine\", state=~\"open|forced_open\"}) * 2 + max(resilience4j_circuitbreaker_state{name=\"riskEngine\", state=\"half_open\"})" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "Risk assessment outcomes",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "stacking": { "mode": "normal" }, "fillOpacity": 40 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "scored" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] },
+          { "matcher": { "id": "byName", "options": "circuit_open" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+          { "matcher": { "id": "byName", "options": "timeout" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] }
+        ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [ { "refId": "A", "legendFormat": "{{outcome}}", "expr": "sum by (outcome) (rate(sentinel_risk_assessment_seconds_count[$__rate_interval]))" } ]
+    },
+    {
+      "type": "timeseries", "title": "Retry amplification",
+      "description": "Calls made to the dependency per assessment. 1.0 = no retries. Retries add load exactly when the dependency is weakest.",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "x", "decimals": 2, "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 10 },
+        "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1.2 } ] } } },
+      "options": { "legend": { "displayMode": "hidden" } },
+      "targets": [ { "refId": "A", "legendFormat": "attempts / assessment", "expr": "sum(rate(sentinel_risk_attempts_total[$__rate_interval])) / sum(rate(sentinel_risk_assessment_seconds_count[$__rate_interval]))" } ]
+    },
+    {
+      "type": "timeseries", "title": "Transfers by decision path",
+      "description": "risk_approved / risk_score_above_threshold come from the dependency; fallback_* come from the degradation policy.",
+      "gridPos": { "h": 7, "w": 16, "x": 8, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "stacking": { "mode": "normal" }, "fillOpacity": 40 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "right" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [ { "refId": "A", "legendFormat": "{{status}} · {{decision}}", "expr": "sum by (status, decision) (rate(sentinel_transfers_total[$__rate_interval]))" } ]
+    },
+
+    { "type": "row", "title": "Security", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 } },
+    {
+      "type": "timeseries", "title": "Security events by type",
+      "gridPos": { "h": 9, "w": 10, "x": 0, "y": 31 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" }, "fillOpacity": 70, "lineWidth": 0 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [ { "refId": "A", "legendFormat": "{{type}} ({{endpoint_group}})", "expr": "sum by (type, endpoint_group) (rate(sentinel_security_events_total[$__rate_interval]))" } ]
+    },
+    {
+      "type": "logs", "title": "Audit trail (Loki) — click a trace_id to open the trace",
+      "gridPos": { "h": 9, "w": 14, "x": 10, "y": 31 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none" },
+      "targets": [ { "refId": "A", "expr": "{service_name=\"sentinel-api\"} | scope_name=\"sentinel.audit\" | line_format \"{{.audit_event}} principal={{.audit_principal}} path={{.url_path}} client={{.client_address}}\"" } ]
+    },
+
+    { "type": "row", "title": "Saturation (USE) — database pool, bulkhead, JVM", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 } },
+    {
+      "type": "timeseries", "title": "Connection pool (HikariCP)",
+      "description": "Pending > 0 means requests are queueing for a connection: the database path is saturated.",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "lineWidth": 2 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "pending" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+          { "matcher": { "id": "byName", "options": "max" }, "properties": [ { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [6, 6] } }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "text" } } ] }
+        ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "legendFormat": "active", "expr": "sum(hikaricp_connections_active)" },
+        { "refId": "B", "legendFormat": "idle", "expr": "sum(hikaricp_connections_idle)" },
+        { "refId": "C", "legendFormat": "pending", "expr": "sum(hikaricp_connections_pending)" },
+        { "refId": "D", "legendFormat": "max", "expr": "sum(hikaricp_connections_max)" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "Risk engine bulkhead",
+      "description": "Free permits for concurrent calls to the dependency. 0 = calls are being rejected (bulkhead_full).",
+      "gridPos": { "h": 8, "w": 5, "x": 8, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "min": 0, "custom": { "lineWidth": 2, "fillOpacity": 15 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "legendFormat": "available", "expr": "sum(resilience4j_bulkhead_available_concurrent_calls{name=\"riskEngine\"})" },
+        { "refId": "B", "legendFormat": "max", "expr": "sum(resilience4j_bulkhead_max_allowed_concurrent_calls{name=\"riskEngine\"})" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "JVM heap & GC",
+      "gridPos": { "h": 8, "w": 6, "x": 13, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+        "overrides": [ { "matcher": { "id": "byName", "options": "time in GC" }, "properties": [ { "id": "unit", "value": "percentunit" }, { "id": "custom.axisPlacement", "value": "right" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "purple" } } ] } ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "legendFormat": "heap used", "expr": "sum(jvm_memory_used_bytes{area=\"heap\"})" },
+        { "refId": "B", "legendFormat": "heap committed", "expr": "sum(jvm_memory_committed_bytes{area=\"heap\"})" },
+        { "refId": "C", "legendFormat": "time in GC", "expr": "sum(rate(jvm_gc_pause_seconds_sum[$__rate_interval]))" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "CPU & platform threads",
+      "description": "Virtual threads are not platform threads: thousands of concurrent requests do not show up here.",
+      "gridPos": { "h": 8, "w": 5, "x": 19, "y": 41 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "custom": { "lineWidth": 2 } },
+        "overrides": [ { "matcher": { "id": "byName", "options": "live threads" }, "properties": [ { "id": "unit", "value": "short" }, { "id": "custom.axisPlacement", "value": "right" } ] } ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "legendFormat": "process CPU", "expr": "max(process_cpu_usage)" },
+        { "refId": "B", "legendFormat": "live threads", "expr": "max(jvm_threads_live_threads)" }
+      ]
+    }
+  ]
+}

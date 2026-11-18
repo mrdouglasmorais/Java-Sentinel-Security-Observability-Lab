@@ -1,0 +1,103 @@
+{
+  "realm": "sentinel",
+  "displayName": "Java Sentinel Lab",
+  "enabled": true,
+  "sslRequired": "external",
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 30,
+  "maxFailureWaitSeconds": 300,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "roles": {
+    "realm": [
+      { "name": "customer", "description": "Holds accounts and initiates transfers" },
+      { "name": "auditor", "description": "Read-only visibility over all accounts and transfers" },
+      { "name": "lab-operator", "description": "Controls fault injection in the lab" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "sentinel-cli",
+      "name": "Sentinel lab CLI (k6, curl, scripts)",
+      "description": "LAB ONLY: public client with the password grant so scripts can obtain tokens without a browser. Production clients must use authorization code + PKCE or client credentials.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "fullScopeAllowed": true,
+      "protocolMappers": [
+        {
+          "name": "audience-sentinel-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "sentinel-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "email": "alice@sentinel.lab",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Andrade",
+      "credentials": [{ "type": "password", "value": "alice-lab-password", "temporary": false }],
+      "realmRoles": ["customer"]
+    },
+    {
+      "username": "bob",
+      "enabled": true,
+      "email": "bob@sentinel.lab",
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Barbosa",
+      "credentials": [{ "type": "password", "value": "bob-lab-password", "temporary": false }],
+      "realmRoles": ["customer"]
+    },
+    {
+      "username": "mallory",
+      "enabled": true,
+      "email": "mallory@sentinel.lab",
+      "emailVerified": true,
+      "firstName": "Mallory",
+      "lastName": "Malicious",
+      "credentials": [{ "type": "password", "value": "mallory-lab-password", "temporary": false }],
+      "realmRoles": ["customer"]
+    },
+    {
+      "username": "carol",
+      "enabled": true,
+      "email": "carol@sentinel.lab",
+      "emailVerified": true,
+      "firstName": "Carol",
+      "lastName": "Costa",
+      "credentials": [{ "type": "password", "value": "carol-lab-password", "temporary": false }],
+      "realmRoles": ["auditor"]
+    },
+    {
+      "username": "ops",
+      "enabled": true,
+      "email": "ops@sentinel.lab",
+      "emailVerified": true,
+      "firstName": "Olivia",
+      "lastName": "Operator",
+      "credentials": [{ "type": "password", "value": "ops-lab-password", "temporary": false }],
+      "realmRoles": ["lab-operator"]
+    }
+  ]
+}

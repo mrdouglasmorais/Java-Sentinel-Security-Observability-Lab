@@ -1,0 +1,91 @@
+# Alerts are symptom-based (what users feel) first, cause-based second. Thresholds are tuned for the lab's
+# short scrape interval and will need recalibration for real traffic.
+groups:
+  - name: sentinel-slo
+    rules:
+      # SLO: 99.5% of API requests succeed (non-5xx) over 30 days -> error budget 0.5%.
+      - record: sentinel:api_error_ratio:rate5m
+        expr: |
+          (sum(rate(http_server_requests_seconds_count{uri=~"/api/.*", status=~"5.."}[5m])) or vector(0))
+          / sum(rate(http_server_requests_seconds_count{uri=~"/api/.*"}[5m]))
+      - record: sentinel:api_error_ratio:rate1h
+        expr: |
+          (sum(rate(http_server_requests_seconds_count{uri=~"/api/.*", status=~"5.."}[1h])) or vector(0))
+          / sum(rate(http_server_requests_seconds_count{uri=~"/api/.*"}[1h]))
+      - record: sentinel:transfer_latency_seconds:p99_1m
+        expr: histogram_quantile(0.99, sum by (le) (rate(http_server_requests_seconds_bucket{uri="/api/transfers", method="POST"}[1m])))
+
+      # Multi-window burn rate (Google SRE workbook): 14.4x burns 2% of a 30-day budget in 1 hour.
+      - alert: SentinelErrorBudgetFastBurn
+        expr: sentinel:api_error_ratio:rate5m > (14.4 * 0.005) and sentinel:api_error_ratio:rate1h > (14.4 * 0.005)
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: API is burning its error budget 14x faster than sustainable
+          description: "5xx ratio {{ $value | humanizePercentage }} over 5m. Open the Sentinel APM dashboard and follow an exemplar."
+
+      - alert: SentinelTransferLatencyP99High
+        expr: sentinel:transfer_latency_seconds:p99_1m > 1
+        for: 2m
+        labels: { severity: ticket }
+        annotations:
+          summary: Transfer P99 latency above 1s
+          description: "P99 is {{ $value | humanizeDuration }}. Compare risk engine attempt vs perceived latency to separate dependency slowness from retry amplification."
+
+  - name: sentinel-dependencies
+    rules:
+      - alert: SentinelRiskEngineCircuitOpen
+        expr: max(resilience4j_circuitbreaker_state{name="riskEngine", state=~"open|forced_open"}) == 1
+        for: 30s
+        labels: { severity: ticket }
+        annotations:
+          summary: Risk engine circuit breaker is open
+          description: Transfers are running on the degradation policy (low value auto-approved, the rest held for manual review).
+
+      - alert: SentinelRetryStorm
+        expr: sum(rate(sentinel_risk_attempts_total[2m])) / sum(rate(sentinel_risk_assessment_seconds_count[2m])) > 1.5
+        for: 1m
+        labels: { severity: ticket }
+        annotations:
+          summary: Retries are amplifying load on the risk engine
+          description: "{{ $value | printf \"%.2f\" }} attempts per assessment."
+
+      - alert: SentinelDatabasePoolSaturated
+        expr: max(hikaricp_connections_pending) > 0
+        for: 30s
+        labels: { severity: ticket }
+        annotations:
+          summary: Requests are waiting for database connections
+          description: "{{ $value }} threads waiting. Look for long database spans holding row locks."
+
+  - name: sentinel-security
+    rules:
+      - alert: SentinelAuthenticationFailureSpike
+        expr: sum(rate(sentinel_security_events_total{type="authentication_failed"}[2m])) > 1
+        for: 1m
+        labels: { severity: ticket }
+        annotations:
+          summary: Spike of rejected bearer tokens
+          description: "{{ $value | printf \"%.1f\" }} failures/s. Query the audit trail in Loki by client.address."
+
+      - alert: SentinelOwnershipProbing
+        expr: sum(increase(sentinel_security_events_total{type="ownership_violation"}[5m])) > 10
+        labels: { severity: ticket }
+        annotations:
+          summary: Possible IDOR/BOLA probing
+          description: "{{ $value | printf \"%.0f\" }} attempts to access resources owned by someone else in 5 minutes."
+
+      - alert: SentinelRateLimitingActive
+        expr: sum(rate(sentinel_security_events_total{type="rate_limited"}[1m])) > 5
+        for: 30s
+        labels: { severity: info }
+        annotations:
+          summary: Clients are being throttled
+          description: Check the audit trail for the principal; legitimate clients may need a higher budget.
+
+      - alert: SentinelLabFaultActive
+        expr: max(sentinel_lab_fault_active) == 1
+        labels: { severity: info }
+        annotations:
+          summary: A lab fault is being injected
+          description: Expected during experiments. Should never fire outside the lab.

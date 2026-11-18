@@ -1,0 +1,179 @@
+name: java-sentinel
+
+# All ports bind to 127.0.0.1: the lab is never exposed on the network interfaces of the host.
+
+x-otel-agent-env: &otel-agent-env
+  OTEL_SERVICE_NAME: sentinel-api
+  OTEL_RESOURCE_ATTRIBUTES: service.namespace=sentinel,deployment.environment.name=lab
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_LOGS_EXPORTER: otlp
+  # Metrics come from Micrometer (Prometheus scrape); the agent would only duplicate them.
+  OTEL_METRICS_EXPORTER: none
+  OTEL_TRACES_SAMPLER: parentbased_always_on
+  # Stable database semantic conventions (db.query.text, db.system.name) instead of the legacy attribute names.
+  OTEL_SEMCONV_STABILITY_OPT_IN: database
+  # Exports SLF4J key-values (audit.event, risk.attempts, ...) as log attributes -> Loki structured metadata.
+  OTEL_INSTRUMENTATION_COMMON_LOGGING_STRUCTURED_ATTRIBUTES_INCLUDED: "*"
+  OTEL_INSTRUMENTATION_LOGBACK_APPENDER_EXPERIMENTAL_CAPTURE_CODE_ATTRIBUTES: "false"
+  OTEL_INSTRUMENTATION_MICROMETER_ENABLED: "false"
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: sentinel
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinel-lab}
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all",
+              "-c", "log_min_duration_statement=500"]
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinel -d sentinel"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.2
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin-lab}
+      # Tokens always carry this issuer, whether requested from the host or from inside the Docker network.
+      KC_HOSTNAME: http://localhost:8180
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./infrastructure/keycloak/sentinel-realm.json:/opt/keycloak/data/import/sentinel-realm.json:ro
+    ports:
+      - "127.0.0.1:8180:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"UP\"' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  sentinel-api:
+    build: .
+    image: java-sentinel/sentinel-api:local
+    environment:
+      <<: *otel-agent-env
+      SPRING_PROFILES_ACTIVE: lab
+      SENTINEL_DB_URL: jdbc:postgresql://postgres:5432/sentinel
+      SENTINEL_DB_USER: sentinel
+      SENTINEL_DB_PASSWORD: ${POSTGRES_PASSWORD:-sentinel-lab}
+      SENTINEL_JWT_ISSUER_URI: http://localhost:8180/realms/sentinel
+      SENTINEL_JWT_JWK_SET_URI: http://keycloak:8080/realms/sentinel/protocol/openid-connect/certs
+    ports:
+      - "127.0.0.1:8080:8080"
+    # Management port 8081 (actuator) is reachable only inside the Docker network.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    # Constrained on purpose so saturation is observable on a laptop.
+    cpus: 2
+    mem_limit: 1g
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.165.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./infrastructure/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+    depends_on:
+      - tempo
+      - loki
+
+  tempo:
+    image: grafana/tempo:3.1.1
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./infrastructure/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "127.0.0.1:3200:3200"
+
+  loki:
+    image: grafana/loki:3.7.10
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - ./infrastructure/loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=3d
+      - --enable-feature=exemplar-storage
+      # Receives span metrics and service graphs from Tempo's metrics generator.
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./infrastructure/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  grafana:
+    image: grafana/grafana:13.3.1
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin-lab}
+      # Anonymous Editor so Explore works without login. Acceptable only because Grafana binds to 127.0.0.1 and
+      # dashboards are provisioned read-only; never do this on a shared host.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Editor
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/sentinel-apm.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+
+  k6:
+    image: grafana/k6:2.4.0
+    profiles: ["load"]
+    environment:
+      BASE_URL: http://sentinel-api:8080
+      KEYCLOAK_URL: http://keycloak:8080
+    volumes:
+      - ./load-tests/k6:/scripts:ro
+    entrypoint: ["k6"]
+    command: ["run", "/scripts/baseline.js"]
+    depends_on:
+      sentinel-api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  tempo-data:
+  loki-data:
+  prometheus-data:
+  grafana-data:

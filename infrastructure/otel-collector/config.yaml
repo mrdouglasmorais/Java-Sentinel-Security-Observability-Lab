@@ -1,0 +1,74 @@
+# Traces and logs from the OpenTelemetry Java agent -> Tempo and Loki.
+# Metrics are scraped by Prometheus directly from the application (Micrometer), so there is no metrics pipeline here.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
+  # Defence in depth: the agent does not capture these by default, but a misconfiguration must not leak them.
+  attributes/scrub:
+    actions:
+      - key: http.request.header.authorization
+        action: delete
+      - key: http.request.header.cookie
+        action: delete
+      - key: http.response.header.set-cookie
+        action: delete
+      - key: url.query
+        action: delete
+
+  # Prometheus scrapes and health probes would otherwise produce a trace every few seconds.
+  filter/drop-probes:
+    error_mode: ignore
+    traces:
+      span:
+        - 'attributes["url.path"] != nil and IsMatch(attributes["url.path"], "^/actuator")'
+
+  batch:
+    send_batch_size: 1024
+    timeout: 2s
+
+exporters:
+  otlp_grpc/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  otlp_http/loki:
+    endpoint: http://loki:3100/otlp
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/drop-probes, attributes/scrub, batch]
+      exporters: [otlp_grpc/tempo]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/scrub, batch]
+      exporters: [otlp_http/loki]
