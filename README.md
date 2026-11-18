@@ -158,7 +158,7 @@ CI (`.github/workflows`):
 | `security.yml` | Trivy on the repository (dependencies, IaC, secrets) and on the built image (fails on fixable HIGH/CRITICAL), CodeQL `security-extended`, OWASP Dependency-Check on `main` and weekly; results in GitHub code scanning |
 | `dependabot.yml` | Weekly grouped updates for Maven, Dockerfile, Compose images and GitHub Actions |
 
-Dependency-Check needs an `NVD_API_KEY` repository secret ([request one](https://nvd.nist.gov/developers/request-an-api-key)).
+The repository scan resolves dependencies with Maven first and hands Trivy the local cache, because Maven Central rate-limits uncached resolution (HTTP 429) and that would fail the job. Dependency-Check needs an `NVD_API_KEY` repository secret ([request one](https://nvd.nist.gov/developers/request-an-api-key)); without it the job warns and skips instead of failing.
 
 ## Engineering decisions worth reading
 
