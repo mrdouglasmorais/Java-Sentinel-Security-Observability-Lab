@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      spring:
+        patterns: ["org.springframework*"]
+      opentelemetry:
+        patterns: ["io.opentelemetry*"]
+      testing:
+        patterns: ["org.testcontainers*", "org.junit*", "org.mockito*", "org.assertj*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Lab images (PostgreSQL, Keycloak, Collector, Tempo, Loki, Prometheus, Grafana, k6).
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      observability-stack:
+        patterns: ["grafana/*", "prom/*", "otel/*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

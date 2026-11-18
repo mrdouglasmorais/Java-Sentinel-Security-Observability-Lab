@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Every suppression needs: the CVE, why it does not apply, who reviewed it and an expiry date ("until"),
+  so suppressions are re-evaluated instead of living forever.
+-->
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+</suppressions>

@@ -1,0 +1,142 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 4 * * 1'   # weekly: new CVEs appear without any code change
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TRIVY_IMAGE: aquasec/trivy:0.76.2
+
+jobs:
+  trivy-fs:
+    name: Trivy — dependencies, IaC and secrets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Trivy runs from its container image rather than a third-party action: one less supply-chain dependency.
+      - name: Scan repository
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src "$TRIVY_IMAGE" fs \
+            --scanners vuln,misconfig,secret \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --format sarif --output trivy-fs.sarif .
+
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  trivy-image:
+    name: Trivy — container image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: docker build -t java-sentinel/sentinel-api:ci .
+
+      - name: Scan image (fails on fixable HIGH/CRITICAL)
+        run: |
+          docker save java-sentinel/sentinel-api:ci -o image.tar
+          docker run --rm -v "$PWD:/work" -w /work "$TRIVY_IMAGE" image --input image.tar --timeout 15m \
+            --severity HIGH,CRITICAL --ignore-unfixed \
+            --format sarif --output trivy-image.sarif
+          docker run --rm -v "$PWD:/work" -w /work "$TRIVY_IMAGE" image --input image.tar --timeout 15m \
+            --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+  dependency-check:
+    name: OWASP Dependency-Check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '27'
+          cache: maven
+
+      - name: Cache NVD database
+        uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository/org/owasp/dependency-check-data
+          key: nvd-${{ github.run_id }}
+          restore-keys: nvd-
+
+      - name: Analyse dependencies (fails on CVSS >= 7)
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: ./mvnw -B -ntp -Psecurity -DskipTests verify -DnvdApiKey="$NVD_API_KEY"
+
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: target/dependency-check-report.sarif
+          category: dependency-check
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: dependency-check-report
+          path: target/dependency-check-report.html
+          retention-days: 30
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      matrix:
+        language: [java-kotlin, actions]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: codeql-${{ matrix.language }}

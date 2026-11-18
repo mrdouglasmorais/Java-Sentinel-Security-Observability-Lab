@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test (JDK 27)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '27'
+          cache: maven
+
+      # Unit tests + integration tests against a real PostgreSQL 18 (Testcontainers, Docker is preinstalled on the runner).
+      - name: Verify
+        run: ./mvnw -B -ntp verify
+
+      - name: Test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: app/target/*-reports/
+          retention-days: 7
+
+  lab-config:
+    name: Validate lab configuration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Compose file
+        run: docker compose config --quiet
+
+      - name: Prometheus config and alert rules
+        run: |
+          docker run --rm -v "$PWD/infrastructure/prometheus:/etc/prometheus:ro" --entrypoint promtool \
+            prom/prometheus:v3.16.0 check config /etc/prometheus/prometheus.yml
+
+      - name: OpenTelemetry Collector config
+        run: |
+          docker run --rm -v "$PWD/infrastructure/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro" \
+            otel/opentelemetry-collector-contrib:0.165.0 validate --config=/etc/otelcol/config.yaml
+
+      - name: Grafana dashboards are valid JSON
+        run: for f in infrastructure/grafana/dashboards/*.json; do jq empty "$f"; done
+
+      - name: k6 scripts parse
+        run: |
+          for f in load-tests/k6/*.js; do
+            docker run --rm -v "$PWD/load-tests/k6:/scripts:ro" grafana/k6:2.4.0 inspect "/scripts/$(basename "$f")" > /dev/null
+          done
