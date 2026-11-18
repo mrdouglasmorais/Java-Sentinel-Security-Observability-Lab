@@ -1,11 +1,16 @@
 target/
-!.mvn/wrapper/maven-wrapper.jar
 *.log
+
+.env
+.env.*
+!.env.example
+
+*.sarif
+image.tar
 
 .idea/
 *.iml
 .vscode/
 .DS_Store
 
-.env
 load-tests/k6/results/
