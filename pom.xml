@@ -35,7 +35,7 @@
         <java.version>27</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-        <opentelemetry-agent.version>2.33.1</opentelemetry-agent.version>
+        <opentelemetry-agent.version>2.34.0</opentelemetry-agent.version>
         <resilience4j.version>2.4.0</resilience4j.version>
         <bucket4j.version>8.22.0</bucket4j.version>
         <dependency-check.version>13.0.0</dependency-check.version>
